@@ -1,14 +1,20 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+#![allow(unused)]
+use crate::node::Node;
+use std::cell::Cell;
+
+mod dist;
+mod link;
+mod node;
+
+#[allow(non_snake_case)]
+struct Hnsw<const D: usize> {
+    M: usize,
+    M0: usize,
+    ef_construction: usize,
+    ef_search: usize,
+    entry_point: usize,
+    data: Vec<[f32; D]>,
+    nodes: Vec<Node>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+impl<const D: usize> Hnsw<D> {}
