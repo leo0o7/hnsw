@@ -39,10 +39,25 @@ impl<const D: usize> Hnsw<D> {
         Self::new(M, 2 * M, 128, 32)
     }
 
-    pub fn search(&self, q: &[f32; D]) {
+    pub fn search(&self, q: &[f32; D], k: usize) -> Vec<(usize, f32)> {
         // TODO: assertions
         // ...
-        todo!()
+        let mut ep = self.entry_point;
+        for lyr in (1..=self.max_layer).rev() {
+            ep = self
+                .search_layer(q, ep, lyr, 1)
+                .first()
+                .unwrap_or_else(|| panic!("ERROR: search_layer@{lyr} returned an empty array"))
+                .node_index;
+        }
+
+        let mut results = self.search_layer(q, ep, 0, self.ef_search.max(k));
+        // take k best from final layer search
+        results
+            .into_iter()
+            .take(k)
+            .map(|l| (l.node_index, l.distance))
+            .collect()
     }
 
     fn search_layer(&self, q: &[f32; D], ep: usize, lyr: usize, ef: usize) -> Vec<Link> {
@@ -102,4 +117,3 @@ impl<const D: usize> Hnsw<D> {
         }
     }
 }
-
