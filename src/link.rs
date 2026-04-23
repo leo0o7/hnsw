@@ -1,3 +1,4 @@
+#[derive(Debug, Clone, Copy)]
 pub struct Link {
     pub node_index: usize,
     pub distance: f32,
