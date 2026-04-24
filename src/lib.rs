@@ -8,6 +8,8 @@ use std::{cell::Cell, cmp::Reverse, collections::BinaryHeap};
 mod dist;
 mod link;
 mod node;
+#[cfg(test)]
+mod tests;
 
 #[allow(non_snake_case)]
 struct Hnsw<const D: usize> {
@@ -99,7 +101,7 @@ impl<const D: usize> Hnsw<D> {
 
         for lyr in (0..=insert_lyr.min(self.max_layer)).rev() {
             let candidates = self.search_layer(&vec, ep, lyr, self.ef_construction);
-            let neighs = self.select_neighbors(&vec, lyr, candidates, true, true);
+            let neighs = self.select_neighbors(&vec, lyr, candidates, false, false);
             self.nodes[insert_idx].layers[lyr] = neighs;
 
             // can't use .iter() here because it would keep an immutable borrow of
@@ -321,7 +323,7 @@ impl<const D: usize> Hnsw<D> {
         links.push(link);
         if links.len() > max_connections {
             let candidates = std::mem::take(links);
-            let new_links = self.select_neighbors(&self.data[at], lyr, candidates, true, true);
+            let new_links = self.select_neighbors(&self.data[at], lyr, candidates, false, false);
             self.nodes[at].layers[lyr] = new_links;
         }
     }
