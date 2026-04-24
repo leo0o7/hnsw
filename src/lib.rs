@@ -43,6 +43,11 @@ impl<const D: usize> Hnsw<D> {
         ef_search: usize,
         seed: u64,
     ) -> Self {
+        assert!(M > 1, "M must be > 1");
+        assert!(M0 > 0, "M0 must be > 0");
+        assert!(ef_construction > 0, "ef_construction must be > 0");
+        assert!(ef_search > 0, "ef_search must be > 0");
+
         let ml = 1.0 / (M as f64).ln();
         Self {
             M,
@@ -65,8 +70,6 @@ impl<const D: usize> Hnsw<D> {
     }
 
     pub fn insert(&mut self, vec: [f32; D]) {
-        // TODO: assertions
-        // ...
         let insert_idx = self.data.len();
         let insert_lyr = self.random_layer();
         self.data.push(vec);
@@ -139,8 +142,10 @@ impl<const D: usize> Hnsw<D> {
     }
 
     pub fn search(&self, q: &[f32; D], k: usize) -> Vec<(usize, f32)> {
-        // TODO: assertions
-        // ...
+        if self.data.is_empty() {
+            return Vec::new();
+        }
+
         let mut ep = self.entry_point;
         for lyr in (1..=self.max_layer).rev() {
             ep = self
@@ -162,9 +167,15 @@ impl<const D: usize> Hnsw<D> {
     }
 
     fn search_layer(&self, q: &[f32; D], ep: usize, lyr: usize, ef: usize) -> Vec<Link> {
+        assert!(ef > 0, "ef must be > 0");
+        assert!(lyr <= self.max_layer, "layer not initialized",);
+        assert!(ep < self.data.len(), "entry point out of bounds",);
+        assert!(
+            lyr < self.nodes[ep].layers.len(),
+            "entry point does not exist in this layer"
+        );
+
         self.epoch.set(self.epoch.get() + 1);
-        // TODO: assertions
-        // ...
         let mut frontier = BinaryHeap::<Reverse<Link>>::new();
         let mut best = BinaryHeap::<Link>::with_capacity(ef);
 
@@ -215,8 +226,8 @@ impl<const D: usize> Hnsw<D> {
         extend: bool,
         keep_pruned: bool,
     ) -> Vec<Link> {
-        // TODO: assertions
-        // ...
+        assert!(lyr <= self.max_layer, "layer not initialized",);
+
         self.epoch.set(self.epoch.get() + 1);
         let mut pq = BinaryHeap::<Reverse<Link>>::new();
         let mut discarded = BinaryHeap::<Reverse<Link>>::new();
@@ -307,6 +318,18 @@ impl<const D: usize> Hnsw<D> {
     }
 
     fn add_backlink(&mut self, at: usize, link: Link, lyr: usize) {
+        assert!(lyr <= self.max_layer, "layer not initialized",);
+        assert!(at < self.data.len(), "backlink base index out of bounds",);
+        assert!(
+            link.node_index < self.data.len(),
+            "backlink connection index out of bounds"
+        );
+        assert!(
+            lyr < self.nodes[at].layers.len(),
+            "node does not exist in this layer"
+        );
+        assert!(link.node_index != at, "can't link node to itself");
+
         let max_connections = if lyr == 0 { self.M0 } else { self.M };
         let links = &mut self.nodes[at].layers[lyr];
 
@@ -336,4 +359,3 @@ impl<const D: usize> Hnsw<D> {
         }
     }
 }
-
