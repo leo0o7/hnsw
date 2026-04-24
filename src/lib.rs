@@ -78,9 +78,10 @@ impl<const D: usize> Hnsw<D> {
             epoch: Cell::new(0),
         });
         for lyr in 0..=insert_lyr {
+            let max_connections = self.max_connections(lyr);
             self.nodes[insert_idx]
                 .layers
-                .push(Vec::with_capacity(if lyr == 0 { self.M0 } else { self.M }));
+                .push(Vec::with_capacity(max_connections));
         }
 
         if insert_idx == 0 {
@@ -102,14 +103,7 @@ impl<const D: usize> Hnsw<D> {
 
         for lyr in (0..=insert_lyr.min(self.max_layer)).rev() {
             let candidates = self.search_layer(&vec, ep, lyr, self.ef_construction);
-            let neighs = self.select_neighbors(
-                &vec,
-                lyr,
-                if lyr == 0 { self.M0 } else { self.M },
-                candidates,
-                true,
-                true,
-            );
+            let neighs = self.select_neighbors(&vec, lyr, candidates, true, true);
             self.nodes[insert_idx].layers[lyr] = neighs;
 
             // can't use .iter() here because it would keep an immutable borrow of
@@ -221,7 +215,6 @@ impl<const D: usize> Hnsw<D> {
         &self,
         qv: &[f32; D],
         lyr: usize,
-        max_connections: usize,
         candidates: Vec<Link>,
         extend: bool,
         keep_pruned: bool,
@@ -232,6 +225,7 @@ impl<const D: usize> Hnsw<D> {
         let mut pq = BinaryHeap::<Reverse<Link>>::new();
         let mut discarded = BinaryHeap::<Reverse<Link>>::new();
         let mut best = Vec::<Link>::new();
+        let max_connections = self.max_connections(lyr);
 
         for (node, vec, idx) in candidates.iter().map(|link| {
             (
@@ -330,16 +324,20 @@ impl<const D: usize> Hnsw<D> {
         );
         assert!(link.node_index != at, "can't link node to itself");
 
-        let max_connections = if lyr == 0 { self.M0 } else { self.M };
+        let max_connections = self.max_connections(lyr);
         let links = &mut self.nodes[at].layers[lyr];
 
         links.push(link);
         if links.len() >= max_connections {
             let candidates = std::mem::take(links);
-            let new_links =
-                self.select_neighbors(&self.data[at], lyr, max_connections, candidates, true, true);
+            let new_links = self.select_neighbors(&self.data[at], lyr, candidates, true, true);
             self.nodes[at].layers[lyr] = new_links;
         }
+    }
+
+    #[inline(always)]
+    fn max_connections(&self, lyr: usize) -> usize {
+        if lyr == 0 { self.M0 } else { self.M }
     }
 
     #[inline(always)]
@@ -359,3 +357,4 @@ impl<const D: usize> Hnsw<D> {
         }
     }
 }
+
