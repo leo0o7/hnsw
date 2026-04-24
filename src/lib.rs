@@ -39,6 +39,63 @@ impl<const D: usize> Hnsw<D> {
         Self::new(M, 2 * M, 128, 32)
     }
 
+    pub fn insert(&mut self, vec: [f32; D]) {
+        // TODO: assertions
+        // ...
+        let insert_idx = self.data.len();
+        let insert_lyr = self.random_layer();
+        self.data.push(vec);
+        self.nodes.push(Node {
+            layers: Vec::with_capacity(insert_lyr),
+            epoch: Cell::new(0),
+        });
+        for lyr in 0..insert_lyr {
+            self.nodes[insert_idx]
+                .layers
+                .push(Vec::with_capacity(if lyr == 0 { self.M0 } else { self.M }));
+        }
+
+        if insert_lyr > self.max_layer {
+            self.max_layer = insert_lyr;
+            self.entry_point = insert_idx;
+            return;
+        }
+
+        let mut ep = self.entry_point;
+        for lyr in (insert_lyr..=self.max_layer).rev() {
+            ep = self
+                .search_layer(&vec, ep, lyr, 1)
+                .first()
+                .unwrap_or_else(|| {
+                    panic!("ERROR: search_layer@{lyr} returned an empty array (insert)")
+                })
+                .node_index;
+        }
+
+        for lyr in (0..=insert_lyr).rev() {
+            let candidates = self.search_layer(&vec, ep, lyr, self.ef_construction);
+            // TODO: select neighbors
+            // ...
+            let neighs = candidates
+                .into_iter()
+                .take(if lyr == 0 { self.M0 } else { self.M })
+                .collect();
+            self.nodes[insert_idx].layers[lyr] = neighs;
+
+            for neigh in self.nodes[insert_idx].layers[lyr].iter() {
+                // TODO: add backlinks + overflow logic
+                // ...
+            }
+
+            ep = self.nodes[insert_idx].layers[lyr]
+                .first()
+                .unwrap_or_else(|| {
+                    panic!("ERROR: no neighbours found while inserting {:?} at layer={lyr} returned an empty array (insert)", vec)
+                })
+                .node_index;
+        }
+    }
+
     pub fn search(&self, q: &[f32; D], k: usize) -> Vec<(usize, f32)> {
         // TODO: assertions
         // ...
@@ -47,7 +104,9 @@ impl<const D: usize> Hnsw<D> {
             ep = self
                 .search_layer(q, ep, lyr, 1)
                 .first()
-                .unwrap_or_else(|| panic!("ERROR: search_layer@{lyr} returned an empty array"))
+                .unwrap_or_else(|| {
+                    panic!("ERROR: search_layer@{lyr} returned an empty array (search)")
+                })
                 .node_index;
         }
 
@@ -105,6 +164,10 @@ impl<const D: usize> Hnsw<D> {
         best.into_sorted_vec()
     }
 
+    fn random_layer(&self) -> usize {
+        todo!()
+    }
+
     #[inline(always)]
     /// very unlikely to ever be required
     /// this can happen only after 2^64 - 1 epochs
@@ -117,3 +180,4 @@ impl<const D: usize> Hnsw<D> {
         }
     }
 }
+
