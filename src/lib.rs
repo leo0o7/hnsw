@@ -223,21 +223,15 @@ impl<const D: usize> Hnsw<D> {
         let mut best = Vec::<Link>::new();
         let max_connections = self.max_connections(lyr);
 
-        for (node, vec, idx) in candidates.iter().map(|link| {
-            (
-                &self.nodes[link.node_index],
-                &self.data[link.node_index],
-                link.node_index,
-            )
-        }) {
+        for (node, link) in candidates
+            .iter()
+            .map(|link| (&self.nodes[link.node_index], link))
+        {
             if node.epoch == self.epoch {
                 continue;
             }
             node.epoch.set(self.epoch.get());
-            pq.push(Reverse(Link {
-                node_index: idx,
-                distance: l2_squared(qv, vec),
-            }));
+            pq.push(Reverse(*link));
 
             if extend {
                 let neighs = &node.layers[lyr];
