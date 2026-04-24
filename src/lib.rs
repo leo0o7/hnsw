@@ -71,23 +71,23 @@ impl<const D: usize> Hnsw<D> {
         let insert_lyr = self.random_layer();
         self.data.push(vec);
         self.nodes.push(Node {
-            layers: Vec::with_capacity(insert_lyr),
+            layers: Vec::with_capacity(insert_lyr + 1),
             epoch: Cell::new(0),
         });
-        for lyr in 0..insert_lyr {
+        for lyr in 0..=insert_lyr {
             self.nodes[insert_idx]
                 .layers
                 .push(Vec::with_capacity(if lyr == 0 { self.M0 } else { self.M }));
         }
 
-        if insert_lyr > self.max_layer {
+        if insert_idx == 0 {
+            self.entry_point = 0;
             self.max_layer = insert_lyr;
-            self.entry_point = insert_idx;
             return;
         }
 
         let mut ep = self.entry_point;
-        for lyr in (insert_lyr..=self.max_layer).rev() {
+        for lyr in ((insert_lyr + 1)..=self.max_layer).rev() {
             ep = self
                 .search_layer(&vec, ep, lyr, 1)
                 .first()
@@ -97,7 +97,7 @@ impl<const D: usize> Hnsw<D> {
                 .node_index;
         }
 
-        for lyr in (0..=insert_lyr).rev() {
+        for lyr in (0..=insert_lyr.min(self.max_layer)).rev() {
             let candidates = self.search_layer(&vec, ep, lyr, self.ef_construction);
             // TODO: select neighbors
             // ...
@@ -123,6 +123,11 @@ impl<const D: usize> Hnsw<D> {
                     panic!("ERROR: no neighbours found while inserting vec at layer={lyr}, an empty array was returned by select_neighbors (insert)")
                 })
                 .node_index;
+        }
+
+        if insert_lyr > self.max_layer {
+            self.max_layer = insert_lyr;
+            self.entry_point = insert_idx;
         }
     }
 
