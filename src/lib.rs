@@ -3,11 +3,7 @@
 use rand::prelude::*;
 
 use crate::{dist::l2_squared, link::Link, node::Node};
-use std::{
-    cell::Cell,
-    cmp::{Reverse, max},
-    collections::BinaryHeap,
-};
+use std::{cell::Cell, cmp::Reverse, collections::BinaryHeap};
 
 mod dist;
 mod link;
@@ -264,9 +260,10 @@ impl<const D: usize> Hnsw<D> {
             }
         }
 
+        self.avoid_epoch_overflow();
         // no pruning required
         if (pq.len() <= max_connections) {
-            return pq.into_sorted_vec().into_iter().map(|r| r.0).collect();
+            return pq.into_iter().map(|l| l.0).collect();
         }
 
         while let Some((node, vec, idx)) = pq.pop().map(|c| {
@@ -328,7 +325,7 @@ impl<const D: usize> Hnsw<D> {
         let links = &mut self.nodes[at].layers[lyr];
 
         links.push(link);
-        if links.len() >= max_connections {
+        if links.len() > max_connections {
             let candidates = std::mem::take(links);
             let new_links = self.select_neighbors(&self.data[at], lyr, candidates, true, true);
             self.nodes[at].layers[lyr] = new_links;
@@ -357,4 +354,3 @@ impl<const D: usize> Hnsw<D> {
         }
     }
 }
-
