@@ -1,4 +1,7 @@
 #![allow(unused)]
+use rand::prelude::*;
+use rand::rngs::ThreadRng;
+
 use crate::{dist::l2_squared, link::Link, node::Node};
 use std::{cell::Cell, cmp::Reverse, collections::BinaryHeap};
 
@@ -17,11 +20,26 @@ struct Hnsw<const D: usize> {
     nodes: Vec<Node>,
     max_layer: usize,
     epoch: Cell<usize>,
+    ml: f64,
+    rng: StdRng,
 }
 
 impl<const D: usize> Hnsw<D> {
     #[allow(non_snake_case)]
     pub fn new(M: usize, M0: usize, ef_construction: usize, ef_search: usize) -> Self {
+        let seed = rand::rng().next_u64();
+        Self::new_seeded(M, M0, ef_construction, ef_search, seed)
+    }
+
+    #[allow(non_snake_case)]
+    pub fn new_seeded(
+        M: usize,
+        M0: usize,
+        ef_construction: usize,
+        ef_search: usize,
+        seed: u64,
+    ) -> Self {
+        let ml = 1.0 / (M as f64).ln();
         Self {
             M,
             M0,
@@ -32,8 +50,11 @@ impl<const D: usize> Hnsw<D> {
             nodes: Vec::new(),
             max_layer: 0,
             epoch: Cell::new(0),
+            ml,
+            rng: SeedableRng::seed_from_u64(seed),
         }
     }
+
     #[allow(non_snake_case)]
     pub fn new_default(M: usize) -> Self {
         Self::new(M, 2 * M, 128, 32)
@@ -164,8 +185,8 @@ impl<const D: usize> Hnsw<D> {
         best.into_sorted_vec()
     }
 
-    fn random_layer(&self) -> usize {
-        todo!()
+    fn random_layer(&mut self) -> usize {
+        (-self.rng.random::<f64>().ln() * self.ml).floor() as usize
     }
 
     #[inline(always)]
