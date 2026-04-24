@@ -1,9 +1,13 @@
 #![allow(unused)]
+
 use rand::prelude::*;
-use rand::rngs::ThreadRng;
 
 use crate::{dist::l2_squared, link::Link, node::Node};
-use std::{cell::Cell, cmp::Reverse, collections::BinaryHeap};
+use std::{
+    cell::Cell,
+    cmp::{Reverse, max},
+    collections::BinaryHeap,
+};
 
 mod dist;
 mod link;
@@ -51,7 +55,7 @@ impl<const D: usize> Hnsw<D> {
             max_layer: 0,
             epoch: Cell::new(0),
             ml,
-            rng: SeedableRng::seed_from_u64(seed),
+            rng: StdRng::seed_from_u64(seed),
         }
     }
 
@@ -97,10 +101,14 @@ impl<const D: usize> Hnsw<D> {
             let candidates = self.search_layer(&vec, ep, lyr, self.ef_construction);
             // TODO: select neighbors
             // ...
-            let neighs = candidates
-                .into_iter()
-                .take(if lyr == 0 { self.M0 } else { self.M })
-                .collect();
+            let neighs = self.select_neighbors(
+                insert_idx,
+                lyr,
+                if lyr == 0 { self.M0 } else { self.M },
+                candidates,
+                true,
+                true,
+            );
             self.nodes[insert_idx].layers[lyr] = neighs;
 
             for neigh in self.nodes[insert_idx].layers[lyr].iter() {
@@ -109,9 +117,10 @@ impl<const D: usize> Hnsw<D> {
             }
 
             ep = self.nodes[insert_idx].layers[lyr]
-                .first()
+                .iter()
+                .min()
                 .unwrap_or_else(|| {
-                    panic!("ERROR: no neighbours found while inserting {:?} at layer={lyr} returned an empty array (insert)", vec)
+                    panic!("ERROR: no neighbours found while inserting vec at layer={lyr}, an empty array was returned by select_neighbors (insert)")
                 })
                 .node_index;
         }
@@ -185,6 +194,108 @@ impl<const D: usize> Hnsw<D> {
         best.into_sorted_vec()
     }
 
+    fn select_neighbors(
+        &self,
+        base: usize,
+        lyr: usize,
+        max_connections: usize,
+        candidates: Vec<Link>,
+        extend: bool,
+        keep_pruned: bool,
+    ) -> Vec<Link> {
+        // TODO: assertions
+        // ...
+        self.epoch.set(self.epoch.get() + 1);
+        let qv = &self.data[base];
+        let mut pq = BinaryHeap::<Reverse<Link>>::new();
+        let mut discarded = BinaryHeap::<Reverse<Link>>::new();
+        let mut best = Vec::<Link>::new();
+
+        for (node, vec, idx) in candidates.iter().map(|link| {
+            (
+                &self.nodes[link.node_index],
+                &self.data[link.node_index],
+                link.node_index,
+            )
+        }) {
+            if node.epoch == self.epoch {
+                continue;
+            }
+            node.epoch.set(self.epoch.get());
+            pq.push(Reverse(Link {
+                node_index: idx,
+                distance: l2_squared(qv, vec),
+            }));
+
+            if extend {
+                let neighs = &node.layers[lyr];
+                for (neigh, vec, idx) in neighs.iter().map(|link| {
+                    (
+                        &self.nodes[link.node_index],
+                        &self.data[link.node_index],
+                        link.node_index,
+                    )
+                }) {
+                    if neigh.epoch == self.epoch {
+                        continue;
+                    }
+                    neigh.epoch.set(self.epoch.get());
+                    pq.push(Reverse(Link {
+                        node_index: idx,
+                        distance: l2_squared(qv, vec),
+                    }));
+                }
+            }
+        }
+
+        // no pruning required
+        if (pq.len() <= max_connections) {
+            return pq.into_sorted_vec().into_iter().map(|r| r.0).collect();
+        }
+
+        while let Some((node, vec, idx)) = pq.pop().map(|c| {
+            (
+                &self.nodes[c.0.node_index],
+                &self.data[c.0.node_index],
+                c.0.node_index,
+            )
+        }) && best.len() < max_connections
+        {
+            let mut diverse = true;
+            let c_to_q = l2_squared(qv, vec);
+            for other in best.iter().map(|link| &self.data[link.node_index]) {
+                let c_to_other = l2_squared(vec, other);
+                if c_to_q >= c_to_other {
+                    diverse = false;
+                    break;
+                }
+            }
+
+            if diverse {
+                best.push(Link {
+                    node_index: idx,
+                    distance: c_to_q,
+                });
+            } else if keep_pruned {
+                discarded.push(Reverse(Link {
+                    node_index: idx,
+                    distance: c_to_q,
+                }));
+            }
+        }
+
+        if keep_pruned {
+            while let Some(Reverse(link)) = discarded.pop()
+                && best.len() < max_connections
+            {
+                best.push(link);
+            }
+        }
+
+        best
+    }
+
+    #[inline(always)]
     fn random_layer(&mut self) -> usize {
         (-self.rng.random::<f64>().ln() * self.ml).floor() as usize
     }
@@ -201,4 +312,3 @@ impl<const D: usize> Hnsw<D> {
         }
     }
 }
-
