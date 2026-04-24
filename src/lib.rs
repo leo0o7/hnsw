@@ -1,6 +1,6 @@
 #![allow(unused)]
 
-use rand::prelude::*;
+use rand::{distr::Open01, prelude::*};
 
 use crate::{dist::l2_squared, link::Link, node::Node};
 use std::{cell::Cell, cmp::Reverse, collections::BinaryHeap};
@@ -335,7 +335,8 @@ impl<const D: usize> Hnsw<D> {
 
     #[inline(always)]
     fn random_layer(&mut self) -> usize {
-        (-self.rng.random::<f64>().ln() * self.ml).floor() as usize
+        let x: f64 = Open01.sample(&mut self.rng);
+        (-x.ln() * self.ml).floor() as usize
     }
 
     #[inline(always)]
@@ -350,3 +351,4 @@ impl<const D: usize> Hnsw<D> {
         }
     }
 }
+
