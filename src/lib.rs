@@ -99,10 +99,8 @@ impl<const D: usize> Hnsw<D> {
 
         for lyr in (0..=insert_lyr.min(self.max_layer)).rev() {
             let candidates = self.search_layer(&vec, ep, lyr, self.ef_construction);
-            // TODO: select neighbors
-            // ...
             let neighs = self.select_neighbors(
-                insert_idx,
+                &vec,
                 lyr,
                 if lyr == 0 { self.M0 } else { self.M },
                 candidates,
@@ -111,9 +109,18 @@ impl<const D: usize> Hnsw<D> {
             );
             self.nodes[insert_idx].layers[lyr] = neighs;
 
-            for neigh in self.nodes[insert_idx].layers[lyr].iter() {
-                // TODO: add backlinks + overflow logic
-                // ...
+            // can't use .iter() here because it would keep an immutable borrow of
+            // the list for the whole loop, which wouldn't allow the mutable
+            // borrow of `self` in `add_backlink`
+            let len = self.nodes[insert_idx].layers[lyr].len();
+            for i in 0..len {
+                // only borrow here, copying the value and ending the borrow before `add_backlink`
+                let fw_link = self.nodes[insert_idx].layers[lyr][i];
+                let backlink = Link {
+                    node_index: insert_idx,
+                    distance: fw_link.distance,
+                };
+                self.add_backlink(fw_link.node_index, backlink, lyr);
             }
 
             ep = self.nodes[insert_idx].layers[lyr]
@@ -201,7 +208,7 @@ impl<const D: usize> Hnsw<D> {
 
     fn select_neighbors(
         &self,
-        base: usize,
+        qv: &[f32; D],
         lyr: usize,
         max_connections: usize,
         candidates: Vec<Link>,
@@ -211,7 +218,6 @@ impl<const D: usize> Hnsw<D> {
         // TODO: assertions
         // ...
         self.epoch.set(self.epoch.get() + 1);
-        let qv = &self.data[base];
         let mut pq = BinaryHeap::<Reverse<Link>>::new();
         let mut discarded = BinaryHeap::<Reverse<Link>>::new();
         let mut best = Vec::<Link>::new();
@@ -300,6 +306,19 @@ impl<const D: usize> Hnsw<D> {
         best
     }
 
+    fn add_backlink(&mut self, at: usize, link: Link, lyr: usize) {
+        let max_connections = if lyr == 0 { self.M0 } else { self.M };
+        let links = &mut self.nodes[at].layers[lyr];
+
+        links.push(link);
+        if links.len() >= max_connections {
+            let candidates = std::mem::take(links);
+            let new_links =
+                self.select_neighbors(&self.data[at], lyr, max_connections, candidates, true, true);
+            self.nodes[at].layers[lyr] = new_links;
+        }
+    }
+
     #[inline(always)]
     fn random_layer(&mut self) -> usize {
         (-self.rng.random::<f64>().ln() * self.ml).floor() as usize
@@ -317,3 +336,4 @@ impl<const D: usize> Hnsw<D> {
         }
     }
 }
+
