@@ -5,6 +5,7 @@ use rand::{distr::Open01, prelude::*};
 use crate::{dist::l2_squared, link::Link, node::Node};
 use std::{cell::Cell, cmp::Reverse, collections::BinaryHeap};
 
+mod disk;
 mod dist;
 mod link;
 mod node;
@@ -23,6 +24,7 @@ struct Hnsw<const D: usize> {
     max_layer: usize,
     epoch: Cell<usize>,
     ml: f64,
+    seed: u64,
     rng: StdRng,
 }
 
@@ -58,6 +60,7 @@ impl<const D: usize> Hnsw<D> {
             max_layer: 0,
             epoch: Cell::new(0),
             ml,
+            seed,
             rng: StdRng::seed_from_u64(seed),
         }
     }
@@ -149,7 +152,7 @@ impl<const D: usize> Hnsw<D> {
                 .node_index;
         }
 
-        let mut results = self.search_layer(q, ep, 0, self.ef_search.max(k));
+        let results = self.search_layer(q, ep, 0, self.ef_search.max(k));
         // take k best from final layer search
         results
             .into_iter()
@@ -258,17 +261,14 @@ impl<const D: usize> Hnsw<D> {
 
         self.avoid_epoch_overflow();
         // no pruning required
-        if (pq.len() <= max_connections) {
+        if pq.len() <= max_connections {
             return pq.into_iter().map(|l| l.0).collect();
         }
 
-        while let Some((node, vec, idx)) = pq.pop().map(|c| {
-            (
-                &self.nodes[c.0.node_index],
-                &self.data[c.0.node_index],
-                c.0.node_index,
-            )
-        }) && best.len() < max_connections
+        while let Some((vec, idx)) = pq
+            .pop()
+            .map(|c| (&self.data[c.0.node_index], c.0.node_index))
+            && best.len() < max_connections
         {
             let mut diverse = true;
             let c_to_q = l2_squared(qv, vec);
@@ -351,4 +351,3 @@ impl<const D: usize> Hnsw<D> {
         }
     }
 }
-

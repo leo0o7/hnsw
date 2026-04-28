@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::{fs, path::PathBuf};
 
 use super::*;
 use rand::RngExt;
@@ -33,6 +34,15 @@ fn calculate_recall(graph_results: Vec<(usize, f32)>, brute_results: Vec<(usize,
         .filter(|(i, _)| graph_set.contains(i))
         .count();
     hits as f32 / brute_results.len() as f32
+}
+
+fn temp_path(name: &str) -> PathBuf {
+    let unique = format!(
+        "hnsw-{name}-{}-{}.bin",
+        std::process::id(),
+        rand::rng().next_u64()
+    );
+    std::env::temp_dir().join(unique)
 }
 
 #[test]
@@ -80,10 +90,33 @@ fn test_duplicate() {
 
 #[test]
 fn test_empty_graph() {
-    let mut knn = Hnsw::new_default(2);
+    let knn = Hnsw::new_default(2);
     let closest = knn.search(&[1.0, 1.0], 3);
     dbg!(&closest);
     assert!(closest.is_empty());
+}
+
+#[test]
+fn test_save_load_roundtrip_search_and_insert() {
+    let path = temp_path("roundtrip");
+    let query = [1.0, 1.0];
+
+    let mut original = Hnsw::new_seeded(5, 10, 128, 32, 42);
+    original.insert([0.0, 0.0]);
+    original.insert([3.0, 3.0]);
+    original.insert([4.0, 4.0]);
+
+    original.save(&path).unwrap();
+    let mut loaded = Hnsw::load(&path).unwrap();
+
+    assert_eq!(loaded.search(&query, 2), original.search(&query, 2));
+
+    original.insert([2.0, 2.0]);
+    loaded.insert([2.0, 2.0]);
+
+    assert_eq!(loaded.search(&query, 3), original.search(&query, 3));
+
+    fs::remove_file(path).unwrap();
 }
 
 #[test]
