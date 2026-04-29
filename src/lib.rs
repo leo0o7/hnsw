@@ -1,10 +1,13 @@
-#![allow(unused)]
-
 use rand::{distr::Open01, prelude::*};
 
-use crate::{dist::l2_squared, link::Link, node::Node};
-use std::{cell::Cell, cmp::Reverse, collections::BinaryHeap};
+use crate::{
+    context::{InsertContext, SearchContext, SelectContext},
+    link::Link,
+    node::Node,
+};
+use std::{cell::Cell, cmp::Reverse};
 
+mod context;
 mod disk;
 mod dist;
 mod link;
@@ -12,8 +15,10 @@ mod node;
 #[cfg(test)]
 mod tests;
 
+pub use dist::l2_squared;
+
 #[allow(non_snake_case)]
-struct Hnsw<const D: usize> {
+pub struct Hnsw<const D: usize> {
     M: usize,
     M0: usize,
     ef_construction: usize,
@@ -70,7 +75,28 @@ impl<const D: usize> Hnsw<D> {
         Self::new(M, 2 * M, 128, 32)
     }
 
+    pub fn insert_context(&self) -> InsertContext {
+        InsertContext {
+            select_ctx: SelectContext::init(self.M0),
+            search_ctx: SearchContext::init(self.ef_construction),
+        }
+    }
+
+    pub fn search_context(&self) -> SearchContext {
+        SearchContext::init(self.ef_search)
+    }
+
     pub fn insert(&mut self, vec: [f32; D]) {
+        let mut ctx = self.insert_context();
+        self.insert_with_context(vec, &mut ctx);
+    }
+
+    pub fn search(&self, q: &[f32; D], k: usize) -> Vec<(usize, f32)> {
+        let mut ctx = self.search_context();
+        self.search_with_context(q, k, &mut ctx)
+    }
+
+    pub fn insert_with_context(&mut self, vec: [f32; D], ctx: &mut InsertContext) {
         let insert_idx = self.data.len();
         let insert_lyr = self.random_layer();
         self.data.push(vec);
@@ -91,10 +117,11 @@ impl<const D: usize> Hnsw<D> {
             return;
         }
 
+        let insert_ctx = &mut ctx.search_ctx;
         let mut ep = self.entry_point;
         for lyr in ((insert_lyr + 1)..=self.max_layer).rev() {
             ep = self
-                .search_layer(&vec, ep, lyr, 1)
+                .search_layer_with_context(&vec, ep, lyr, 1, insert_ctx)
                 .first()
                 .unwrap_or_else(|| {
                     panic!("ERROR: search_layer@{lyr} returned an empty array (insert)")
@@ -102,9 +129,11 @@ impl<const D: usize> Hnsw<D> {
                 .node_index;
         }
 
+        let select_ctx = &mut ctx.select_ctx;
         for lyr in (0..=insert_lyr.min(self.max_layer)).rev() {
-            let candidates = self.search_layer(&vec, ep, lyr, self.ef_construction);
-            let neighs = self.select_neighbors(&vec, lyr, candidates, false, false);
+            let candidates =
+                self.search_layer_with_context(&vec, ep, lyr, self.ef_construction, insert_ctx);
+            let neighs = self.select_neighbors(&vec, lyr, candidates, false, false, select_ctx);
             self.nodes[insert_idx].layers[lyr] = neighs;
 
             // can't use .iter() here because it would keep an immutable borrow of
@@ -118,7 +147,7 @@ impl<const D: usize> Hnsw<D> {
                     node_index: insert_idx,
                     distance: fw_link.distance,
                 };
-                self.add_backlink(fw_link.node_index, backlink, lyr);
+                self.add_backlink(fw_link.node_index, backlink, lyr, select_ctx);
             }
 
             ep = self.nodes[insert_idx].layers[lyr]
@@ -136,7 +165,12 @@ impl<const D: usize> Hnsw<D> {
         }
     }
 
-    pub fn search(&self, q: &[f32; D], k: usize) -> Vec<(usize, f32)> {
+    pub fn search_with_context(
+        &self,
+        q: &[f32; D],
+        k: usize,
+        ctx: &mut SearchContext,
+    ) -> Vec<(usize, f32)> {
         if self.data.is_empty() {
             return Vec::new();
         }
@@ -144,7 +178,7 @@ impl<const D: usize> Hnsw<D> {
         let mut ep = self.entry_point;
         for lyr in (1..=self.max_layer).rev() {
             ep = self
-                .search_layer(q, ep, lyr, 1)
+                .search_layer_with_context(q, ep, lyr, 1, ctx)
                 .first()
                 .unwrap_or_else(|| {
                     panic!("ERROR: search_layer@{lyr} returned an empty array (search)")
@@ -152,16 +186,22 @@ impl<const D: usize> Hnsw<D> {
                 .node_index;
         }
 
-        let results = self.search_layer(q, ep, 0, self.ef_search.max(k));
+        let results = self.search_layer_with_context(q, ep, 0, self.ef_search.max(k), ctx);
         // take k best from final layer search
-        results
-            .into_iter()
-            .take(k)
+        results[..k.min(results.len())]
+            .iter()
             .map(|l| (l.node_index, l.distance))
             .collect()
     }
 
-    fn search_layer(&self, q: &[f32; D], ep: usize, lyr: usize, ef: usize) -> Vec<Link> {
+    fn search_layer_with_context<'a>(
+        &self,
+        q: &[f32; D],
+        ep: usize,
+        lyr: usize,
+        ef: usize,
+        ctx: &'a mut SearchContext,
+    ) -> &'a [Link] {
         assert!(ef > 0, "ef must be > 0");
         assert!(lyr <= self.max_layer, "layer not initialized",);
         assert!(ep < self.data.len(), "entry point out of bounds",);
@@ -169,10 +209,10 @@ impl<const D: usize> Hnsw<D> {
             lyr < self.nodes[ep].layers.len(),
             "entry point does not exist in this layer"
         );
-
+        ctx.clear();
+        let frontier = &mut ctx.frontier;
+        let best = &mut ctx.best;
         self.epoch.set(self.epoch.get() + 1);
-        let mut frontier = BinaryHeap::<Reverse<Link>>::new();
-        let mut best = BinaryHeap::<Link>::with_capacity(ef);
 
         let ep_link = Link {
             node_index: ep,
@@ -209,23 +249,25 @@ impl<const D: usize> Hnsw<D> {
         }
 
         self.avoid_epoch_overflow();
-        best.into_sorted_vec()
+        ctx.consume_best()
     }
 
     fn select_neighbors(
         &self,
         qv: &[f32; D],
         lyr: usize,
-        candidates: Vec<Link>,
+        candidates: &[Link],
         extend: bool,
         keep_pruned: bool,
+        ctx: &mut SelectContext,
     ) -> Vec<Link> {
         assert!(lyr <= self.max_layer, "layer not initialized",);
 
+        ctx.clear();
         self.epoch.set(self.epoch.get() + 1);
-        let mut pq = BinaryHeap::<Reverse<Link>>::new();
-        let mut discarded = BinaryHeap::<Reverse<Link>>::new();
-        let mut best = Vec::<Link>::new();
+        let pq = &mut ctx.pq;
+        let discarded = &mut ctx.discarded;
+        let best = &mut ctx.best;
         let max_connections = self.max_connections(lyr);
 
         for (node, link) in candidates
@@ -262,7 +304,7 @@ impl<const D: usize> Hnsw<D> {
         self.avoid_epoch_overflow();
         // no pruning required
         if pq.len() <= max_connections {
-            return pq.into_iter().map(|l| l.0).collect();
+            return ctx.consume_pq();
         }
 
         while let Some((vec, idx)) = pq
@@ -301,10 +343,10 @@ impl<const D: usize> Hnsw<D> {
             }
         }
 
-        best
+        ctx.consume_best()
     }
 
-    fn add_backlink(&mut self, at: usize, link: Link, lyr: usize) {
+    fn add_backlink(&mut self, at: usize, link: Link, lyr: usize, ctx: &mut SelectContext) {
         assert!(lyr <= self.max_layer, "layer not initialized",);
         assert!(at < self.data.len(), "backlink base index out of bounds",);
         assert!(
@@ -323,7 +365,8 @@ impl<const D: usize> Hnsw<D> {
         links.push(link);
         if links.len() > max_connections {
             let candidates = std::mem::take(links);
-            let new_links = self.select_neighbors(&self.data[at], lyr, candidates, false, false);
+            let new_links =
+                self.select_neighbors(&self.data[at], lyr, &candidates, false, false, ctx);
             self.nodes[at].layers[lyr] = new_links;
         }
     }
