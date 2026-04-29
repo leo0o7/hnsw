@@ -7,28 +7,38 @@ use dataset::{load_ground_truth, load_vectors, open_dataset, open_optional_datas
 use hdf5::File;
 use helpers::{compute_ground_truth, duration_average, ms, percentile, recall_at_k};
 use hnsw::Hnsw;
+use serde::Deserialize;
 use std::{
+    env,
     error::Error,
     hint::black_box,
     time::{Duration, Instant},
 };
 
-// mnist-784-euclidean.hdf5
-const DIM: usize = 128;
-const DATASET_PATH: &str = "data/sift-128-euclidean.hdf5";
-const TOP_K: usize = 10;
-const WARMUP_QUERIES: usize = 100;
-const QUERY_LIMIT: Option<usize> = Some(1_000);
-const BASE_LIMIT: Option<usize> = None;
-const LOAD_INDEX_PREFIX: Option<&str> = Some("data/index/sift-128-euclidean-1MLN");
-const SAVE_INDEX_PREFIX: Option<&str> = None;
-const SEED: u64 = 42;
+const DEFAULT_CONFIG_PATH: &str = "bench-config.toml";
+const DEFAULT_BASE_DATASETS: &[&str] = &["train", "base"];
+const DEFAULT_QUERY_DATASETS: &[&str] = &["test", "query", "queries"];
+const DEFAULT_GROUND_TRUTH_DATASETS: &[&str] = &["neighbors", "knns", "groundtruth"];
 
-const BASE_DATASETS: &[&str] = &["train", "base"];
-const QUERY_DATASETS: &[&str] = &["test", "query", "queries"];
-const GROUND_TRUTH_DATASETS: &[&str] = &["neighbors", "knns", "groundtruth"];
+#[derive(Debug, Deserialize)]
+struct BenchFile {
+    dataset_path: String,
+    dimension: usize,
+    top_k: usize,
+    warmup_queries: usize,
+    query_cycles: Option<usize>,
+    query_limit: Option<usize>,
+    base_limit: Option<usize>,
+    load_index_prefix: Option<String>,
+    save_index_prefix: Option<String>,
+    seed: Option<u64>,
+    base_datasets: Option<Vec<String>>,
+    query_datasets: Option<Vec<String>>,
+    ground_truth_datasets: Option<Vec<String>>,
+    configs: Vec<BenchConfig>,
+}
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Deserialize)]
 struct BenchConfig {
     m: usize,
     m0: usize,
@@ -37,41 +47,13 @@ struct BenchConfig {
 }
 
 impl BenchConfig {
-    fn index_path(self, prefix: &str) -> String {
+    fn index_path(self, prefix: &str, dimension: usize) -> String {
         format!(
-            "{prefix}-dim{DIM}-m{}-m0{}-efc{}-efs{}.bin",
+            "{prefix}-dim{dimension}-m{}-m0{}-efc{}-efs{}.bin",
             self.m, self.m0, self.ef_construction, self.ef_search
         )
     }
 }
-
-#[allow(non_upper_case_globals)]
-const config: [BenchConfig; 4] = [
-    BenchConfig {
-        m: 16,
-        m0: 32,
-        ef_construction: 128,
-        ef_search: 32,
-    },
-    BenchConfig {
-        m: 16,
-        m0: 32,
-        ef_construction: 128,
-        ef_search: 64,
-    },
-    BenchConfig {
-        m: 32,
-        m0: 64,
-        ef_construction: 200,
-        ef_search: 64,
-    },
-    BenchConfig {
-        m: 32,
-        m0: 64,
-        ef_construction: 200,
-        ef_search: 128,
-    },
-];
 
 #[derive(Debug)]
 struct Metrics {
@@ -92,12 +74,34 @@ struct Metrics {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let file = File::open(DATASET_PATH)?;
-    let (base_name, base_dataset) = open_dataset(&file, BASE_DATASETS)?;
-    let (query_name, query_dataset) = open_dataset(&file, QUERY_DATASETS)?;
+    let config_path = env::args()
+        .nth(1)
+        .unwrap_or_else(|| DEFAULT_CONFIG_PATH.to_owned());
+    let config: BenchFile = toml::from_str(&std::fs::read_to_string(&config_path)?)?;
 
-    let base = load_vectors::<DIM>(&base_name, &base_dataset, BASE_LIMIT)?;
-    let queries = load_vectors::<DIM>(&query_name, &query_dataset, QUERY_LIMIT)?;
+    match config.dimension {
+        128 => run::<128>(&config),
+        784 => run::<784>(&config),
+        other => Err(
+            format!("unsupported dimension {other}; add a match arm in src/bin/bench.rs").into(),
+        ),
+    }
+}
+
+fn run<const DIM: usize>(config: &BenchFile) -> Result<(), Box<dyn Error>> {
+    let file = File::open(&config.dataset_path)?;
+    let base_dataset_names = dataset_names(config.base_datasets.as_deref(), DEFAULT_BASE_DATASETS);
+    let query_dataset_names =
+        dataset_names(config.query_datasets.as_deref(), DEFAULT_QUERY_DATASETS);
+    let ground_truth_dataset_names = dataset_names(
+        config.ground_truth_datasets.as_deref(),
+        DEFAULT_GROUND_TRUTH_DATASETS,
+    );
+    let (base_name, base_dataset) = open_dataset(&file, &base_dataset_names)?;
+    let (query_name, query_dataset) = open_dataset(&file, &query_dataset_names)?;
+
+    let base = load_vectors::<DIM>(&base_name, &base_dataset, config.base_limit)?;
+    let queries = load_vectors::<DIM>(&query_name, &query_dataset, config.query_limit)?;
 
     if base.is_empty() {
         return Err("base dataset is empty".into());
@@ -106,15 +110,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("query dataset is empty".into());
     }
 
-    let k = TOP_K.min(base.len());
-    let ground_truth = match open_optional_dataset(&file, GROUND_TRUTH_DATASETS) {
-        Some((name, dataset)) if BASE_LIMIT.is_none() => {
+    let k = config.top_k.min(base.len());
+    let ground_truth = match open_optional_dataset(&file, &ground_truth_dataset_names) {
+        Some((name, dataset)) if config.base_limit.is_none() => {
             println!("using ground truth dataset '{name}'");
             load_ground_truth(&name, &dataset, queries.len(), k)?
         }
         Some((name, _)) => {
             println!(
-                "ignoring ground truth dataset '{name}' because BASE_LIMIT is set; computing exact recall for the truncated base set"
+                "ignoring ground truth dataset '{name}' because base_limit is set; computing exact recall for the truncated base set"
             );
             compute_ground_truth(&base, &queries, k)
         }
@@ -124,33 +128,44 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    println!("dataset: {DATASET_PATH}");
+    println!("dataset: {}", config.dataset_path);
     println!("base: {base_name} ({} vectors)", base.len());
     println!("queries: {query_name} ({} vectors)", queries.len());
     println!("dimension: {DIM}");
     println!("recall metric: recall@{k}");
     println!(
         "warmup queries: {}",
-        WARMUP_QUERIES.min(queries.len().saturating_sub(1))
+        config.warmup_queries.min(queries.len().saturating_sub(1))
     );
+    println!("query cycles: {}", config.query_cycles());
     println!();
 
-    for params in config {
-        let metrics = run_benchmark(&base, &queries, &ground_truth, params, k)?;
+    for params in config.configs.iter().copied() {
+        let metrics = run_benchmark(&base, &queries, &ground_truth, params, k, config)?;
         print_metrics(params, k, &metrics);
     }
 
     Ok(())
 }
 
-fn run_benchmark(
+fn dataset_names<'a>(configured: Option<&'a [String]>, defaults: &[&'a str]) -> Vec<&'a str> {
+    configured
+        .map(|names| names.iter().map(String::as_str).collect())
+        .unwrap_or_else(|| defaults.to_vec())
+}
+
+fn run_benchmark<const DIM: usize>(
     base: &[[f32; DIM]],
     queries: &[[f32; DIM]],
     ground_truth: &[Vec<usize>],
     params: BenchConfig,
     k: usize,
+    config: &BenchFile,
 ) -> Result<Metrics, Box<dyn Error>> {
-    let load_path = LOAD_INDEX_PREFIX.map(|prefix| params.index_path(prefix));
+    let load_path = config
+        .load_index_prefix
+        .as_deref()
+        .map(|prefix| params.index_path(prefix, DIM));
     let (index, build_time, insert_qps, load_time) = match &load_path {
         Some(path) => {
             let load_start = Instant::now();
@@ -164,7 +179,7 @@ fn run_benchmark(
                 params.m0,
                 params.ef_construction,
                 params.ef_search,
-                SEED,
+                config.seed.unwrap_or(42),
             );
 
             let build_start = Instant::now();
@@ -178,7 +193,10 @@ fn run_benchmark(
         }
     };
 
-    let save_path = SAVE_INDEX_PREFIX.map(|prefix| params.index_path(prefix));
+    let save_path = config
+        .save_index_prefix
+        .as_deref()
+        .map(|prefix| params.index_path(prefix, DIM));
     let save_time = if let Some(path) = &save_path {
         let save_start = Instant::now();
         index.save(path)?;
@@ -187,30 +205,34 @@ fn run_benchmark(
         None
     };
 
-    let warmup = WARMUP_QUERIES.min(queries.len().saturating_sub(1));
+    let warmup = config.warmup_queries.min(queries.len().saturating_sub(1));
     let mut search_ctx = index.search_context();
     for query in queries.iter().take(warmup) {
         let _ = black_box(index.search_with_context(black_box(query), k, &mut search_ctx));
     }
 
     let measured_queries = queries.len() - warmup;
+    let query_cycles = config.query_cycles();
+    let total_measured_queries = measured_queries * query_cycles;
     let mut total_search_time = Duration::ZERO;
     let mut recall_sum = 0.0;
-    let mut latencies = Vec::with_capacity(measured_queries);
+    let mut latencies = Vec::with_capacity(total_measured_queries);
 
-    for (query, expected) in queries.iter().zip(ground_truth).skip(warmup) {
-        let start = Instant::now();
-        let result = index.search_with_context(black_box(query), k, &mut search_ctx);
-        let latency = start.elapsed();
+    for _ in 0..query_cycles {
+        for (query, expected) in queries.iter().zip(ground_truth).skip(warmup) {
+            let start = Instant::now();
+            let result = index.search_with_context(black_box(query), k, &mut search_ctx);
+            let latency = start.elapsed();
 
-        total_search_time += latency;
-        recall_sum += recall_at_k(expected, &result);
-        latencies.push(latency);
-        black_box(result);
+            total_search_time += latency;
+            recall_sum += recall_at_k(expected, &result);
+            latencies.push(latency);
+            black_box(result);
+        }
     }
 
     latencies.sort_unstable();
-    let avg_latency = duration_average(total_search_time, measured_queries);
+    let avg_latency = duration_average(total_search_time, total_measured_queries);
 
     Ok(Metrics {
         build_time,
@@ -219,15 +241,21 @@ fn run_benchmark(
         load_path,
         save_time,
         save_path,
-        query_count: measured_queries,
-        qps: measured_queries as f64 / total_search_time.as_secs_f64(),
-        recall: recall_sum / measured_queries as f64,
+        query_count: total_measured_queries,
+        qps: total_measured_queries as f64 / total_search_time.as_secs_f64(),
+        recall: recall_sum / total_measured_queries as f64,
         avg_latency,
         p50: percentile(&latencies, 0.50),
         p90: percentile(&latencies, 0.90),
         p99: percentile(&latencies, 0.99),
         max_latency: *latencies.last().unwrap(),
     })
+}
+
+impl BenchFile {
+    fn query_cycles(&self) -> usize {
+        self.query_cycles.unwrap_or(1).max(1)
+    }
 }
 
 fn print_metrics(params: BenchConfig, k: usize, metrics: &Metrics) {
