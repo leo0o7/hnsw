@@ -5,7 +5,7 @@ mod helpers;
 
 use dataset::{load_ground_truth, load_vectors, open_dataset, open_optional_dataset};
 use hdf5::File;
-use helpers::{compute_ground_truth, duration_average, ms, percentile, recall_at_k};
+use helpers::{compute_ground_truth, duration_average, mib, ms, percentile, recall_at_k};
 use hnsw::Hnsw;
 use serde::Deserialize;
 use std::{
@@ -63,6 +63,7 @@ struct Metrics {
     load_path: Option<String>,
     save_time: Option<Duration>,
     save_path: Option<String>,
+    memory_bytes: usize,
     query_count: usize,
     qps: f64,
     recall: f64,
@@ -204,6 +205,7 @@ fn run_benchmark<const DIM: usize>(
     } else {
         None
     };
+    let memory_bytes = index.memory_usage_bytes();
 
     let warmup = config.warmup_queries.min(queries.len().saturating_sub(1));
     let mut search_ctx = index.search_context();
@@ -241,6 +243,7 @@ fn run_benchmark<const DIM: usize>(
         load_path,
         save_time,
         save_path,
+        memory_bytes,
         query_count: total_measured_queries,
         qps: total_measured_queries as f64 / total_search_time.as_secs_f64(),
         recall: recall_sum / total_measured_queries as f64,
@@ -284,6 +287,11 @@ fn print_metrics(params: BenchConfig, k: usize, metrics: &Metrics) {
             println!("  save: {:.3}s", save_time.as_secs_f64());
         }
     }
+    println!(
+        "  memory: {:.2} MiB ({} bytes)",
+        mib(metrics.memory_bytes),
+        metrics.memory_bytes,
+    );
     println!(
         "  search: recall@{k} {:.4}, {:.1} QPS over {} measured queries",
         metrics.recall, metrics.qps, metrics.query_count,

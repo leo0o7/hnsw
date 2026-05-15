@@ -3,9 +3,9 @@ use rand::{distr::Open01, prelude::*};
 use crate::{
     context::{InsertContext, SearchContext, SelectContext},
     link::Link,
-    node::Node,
+    node::{Node, nodes_heap_usage_bytes},
 };
-use std::{cell::Cell, cmp::Reverse};
+use std::{cell::Cell, cmp::Reverse, mem::size_of};
 
 mod context;
 mod disk;
@@ -21,12 +21,12 @@ pub use dist::l2_squared;
 pub struct Hnsw<const D: usize> {
     M: usize,
     M0: usize,
-    ef_construction: usize,
+    pub(crate) ef_construction: usize,
     ef_search: usize,
-    entry_point: usize,
-    data: Vec<[f32; D]>,
-    nodes: Vec<Node>,
-    max_layer: usize,
+    pub(crate) entry_point: usize,
+    pub(crate) data: Vec<[f32; D]>,
+    pub(crate) nodes: Vec<Node>,
+    pub(crate) max_layer: usize,
     epoch: Cell<usize>,
     ml: f64,
     seed: u64,
@@ -392,5 +392,11 @@ impl<const D: usize> Hnsw<D> {
                 node.epoch.set(0);
             }
         }
+    }
+
+    pub fn memory_usage_bytes(&self) -> usize {
+        size_of::<Self>()
+            + self.data.capacity() * size_of::<[f32; D]>()
+            + nodes_heap_usage_bytes(&self.nodes)
     }
 }

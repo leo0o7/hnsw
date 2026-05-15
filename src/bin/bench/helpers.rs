@@ -87,3 +87,7 @@ pub(crate) fn duration_average(total: Duration, count: usize) -> Duration {
 pub(crate) fn ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1_000.0
 }
+
+pub(crate) fn mib(bytes: usize) -> f64 {
+    bytes as f64 / (1024.0 * 1024.0)
+}

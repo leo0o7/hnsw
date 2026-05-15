@@ -16,3 +16,14 @@ pub struct Node {
     )]
     pub epoch: Cell<usize>,
 }
+
+pub(crate) fn nodes_heap_usage_bytes(nodes: &Vec<Node>) -> usize {
+    let mut bytes = nodes.capacity() * size_of::<Node>();
+    for node in nodes {
+        bytes += node.layers.capacity() * size_of::<Vec<Link>>();
+        for layer in &node.layers {
+            bytes += layer.capacity() * size_of::<Link>();
+        }
+    }
+    bytes
+}
