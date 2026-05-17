@@ -15,6 +15,11 @@ seed = 42
 # query_datasets = ["test", "query", "queries"]
 # ground_truth_datasets = ["neighbors", "knns", "groundtruth"]
 
+# [quantized]
+# quantizers = 64
+# pq_k = 256
+# pq_oracle = false
+
 [[configs]]
 m = 16
 m0 = 32
