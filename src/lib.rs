@@ -10,6 +10,7 @@ use std::{cell::Cell, cmp::Reverse, mem::size_of};
 mod context;
 mod disk;
 mod dist;
+mod frozen_pq_index;
 mod link;
 mod node;
 #[cfg(test)]
@@ -31,6 +32,21 @@ pub struct Hnsw<const D: usize> {
     ml: f64,
     seed: u64,
     rng: StdRng,
+}
+
+pub trait HnswSearcher<const D: usize> {
+    fn search_context(&self) -> SearchContext;
+
+    fn search(&self, q: &[f32; D], k: usize) -> Vec<(usize, f32)>;
+
+    fn search_with_context(
+        &self,
+        q: &[f32; D],
+        k: usize,
+        ctx: &mut SearchContext,
+    ) -> Vec<(usize, f32)>;
+
+    fn memory_usage_bytes(&self) -> usize;
 }
 
 impl<const D: usize> Hnsw<D> {
@@ -82,18 +98,9 @@ impl<const D: usize> Hnsw<D> {
         }
     }
 
-    pub fn search_context(&self) -> SearchContext {
-        SearchContext::init(self.ef_search)
-    }
-
     pub fn insert(&mut self, vec: [f32; D]) {
         let mut ctx = self.insert_context();
         self.insert_with_context(vec, &mut ctx);
-    }
-
-    pub fn search(&self, q: &[f32; D], k: usize) -> Vec<(usize, f32)> {
-        let mut ctx = self.search_context();
-        self.search_with_context(q, k, &mut ctx)
     }
 
     pub fn insert_with_context(&mut self, vec: [f32; D], ctx: &mut InsertContext) {
@@ -163,35 +170,6 @@ impl<const D: usize> Hnsw<D> {
             self.max_layer = insert_lyr;
             self.entry_point = insert_idx;
         }
-    }
-
-    pub fn search_with_context(
-        &self,
-        q: &[f32; D],
-        k: usize,
-        ctx: &mut SearchContext,
-    ) -> Vec<(usize, f32)> {
-        if self.data.is_empty() {
-            return Vec::new();
-        }
-
-        let mut ep = self.entry_point;
-        for lyr in (1..=self.max_layer).rev() {
-            ep = self
-                .search_layer_with_context(q, ep, lyr, 1, ctx)
-                .first()
-                .unwrap_or_else(|| {
-                    panic!("ERROR: search_layer@{lyr} returned an empty array (search)")
-                })
-                .node_index;
-        }
-
-        let results = self.search_layer_with_context(q, ep, 0, self.ef_search.max(k), ctx);
-        // take k best from final layer search
-        results[..k.min(results.len())]
-            .iter()
-            .map(|l| (l.node_index, l.distance))
-            .collect()
     }
 
     fn search_layer_with_context<'a>(
@@ -393,8 +371,48 @@ impl<const D: usize> Hnsw<D> {
             }
         }
     }
+}
 
-    pub fn memory_usage_bytes(&self) -> usize {
+impl<const D: usize> HnswSearcher<D> for Hnsw<D> {
+    fn search_context(&self) -> SearchContext {
+        SearchContext::init(self.ef_search)
+    }
+
+    fn search(&self, q: &[f32; D], k: usize) -> Vec<(usize, f32)> {
+        let mut ctx = self.search_context();
+        self.search_with_context(q, k, &mut ctx)
+    }
+
+    fn search_with_context(
+        &self,
+        q: &[f32; D],
+        k: usize,
+        ctx: &mut SearchContext,
+    ) -> Vec<(usize, f32)> {
+        if self.data.is_empty() {
+            return Vec::new();
+        }
+
+        let mut ep = self.entry_point;
+        for lyr in (1..=self.max_layer).rev() {
+            ep = self
+                .search_layer_with_context(q, ep, lyr, 1, ctx)
+                .first()
+                .unwrap_or_else(|| {
+                    panic!("ERROR: search_layer@{lyr} returned an empty array (search)")
+                })
+                .node_index;
+        }
+
+        let results = self.search_layer_with_context(q, ep, 0, self.ef_search.max(k), ctx);
+        // take k best from final layer search
+        results[..k.min(results.len())]
+            .iter()
+            .map(|l| (l.node_index, l.distance))
+            .collect()
+    }
+
+    fn memory_usage_bytes(&self) -> usize {
         size_of::<Self>()
             + self.data.capacity() * size_of::<[f32; D]>()
             + nodes_heap_usage_bytes(&self.nodes)
