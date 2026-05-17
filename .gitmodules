@@ -1,0 +1,3 @@
+[submodule "pq"]
+	path = pq
+	url = https://github.com/leo0o7/product-quantization.git

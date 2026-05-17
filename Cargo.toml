@@ -10,6 +10,7 @@ hdf5-sys = { version = "0.8.1", features = ["static"] }
 rand = "0.10.1"
 serde = { version = "1.0.228", features = ["derive"] }
 toml = "1.1.2"
+pq = { path = "pq" }
 
 [profile.release]
 debug = true
