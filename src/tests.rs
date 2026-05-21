@@ -97,6 +97,19 @@ fn test_empty_graph() {
 }
 
 #[test]
+#[should_panic(expected = "quantized data length must match HNSW index length")]
+fn freeze_with_pq_rejects_mismatched_quantized_data() {
+    let mut hnsw = Hnsw::<1>::new_default(2);
+    hnsw.insert([1.0]);
+    hnsw.insert([2.0]);
+
+    let mut pq = pq::ProductQuantizer::<1, 1>::new(1);
+    pq.fit(&[[1.0], [2.0]]);
+
+    hnsw.freeze_with_pq(pq, vec![[0]]);
+}
+
+#[test]
 fn test_save_load_roundtrip_search_and_insert() {
     let path = temp_path("roundtrip");
     let query = [1.0, 1.0];

@@ -22,6 +22,11 @@ impl<const D: usize, const Q: usize> FrozenPQHnsw<D, Q> {
         quantized_data: Vec<[u8; Q]>,
         pq: ProductQuantizer<Q, D>,
     ) -> Self {
+        assert_eq!(
+            quantized_data.len(),
+            hnsw.len(),
+            "quantized data length must match HNSW index length"
+        );
         Self {
             ef_search: hnsw.ef_search,
             entry_point: hnsw.entry_point,

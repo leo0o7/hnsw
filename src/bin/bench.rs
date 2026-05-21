@@ -363,6 +363,14 @@ fn load_or_build_index<const DIM: usize>(
             let load_start = Instant::now();
             let index = Hnsw::<DIM>::load(path)?;
             let load_time = load_start.elapsed();
+            if index.len() != base.len() {
+                return Err(format!(
+                    "loaded index '{path}' has {} vectors, but benchmark base has {} vectors; use a matching index or remove load_index_prefix",
+                    index.len(),
+                    base.len()
+                )
+                .into());
+            }
             (index, None, None, Some(load_time))
         }
         None => {

@@ -371,6 +371,14 @@ impl<const D: usize> Hnsw<D> {
             }
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
 }
 
 impl<const D: usize> HnswSearcher<D> for Hnsw<D> {
