@@ -1,4 +1,5 @@
 use pq::ProductQuantizer;
+use rayon::prelude::*;
 
 use crate::{
     Hnsw, HnswSearcher, context::SearchContext, link::Link, node::Node, nodes_heap_usage_bytes,
@@ -45,7 +46,7 @@ impl<const D: usize, const Q: usize> FrozenPQHnsw<D, Q> {
 
         Self::from_pq(
             hnsw,
-            hnsw_data.into_iter().map(|v| pq.encode(&v)).collect(),
+            hnsw_data.into_par_iter().map(|v| pq.encode(&v)).collect(),
             pq,
         )
     }

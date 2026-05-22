@@ -8,6 +8,7 @@ use hdf5::File;
 use helpers::{compute_ground_truth, duration_average, mib, ms, percentile, recall_at_k};
 use hnsw::{Hnsw, HnswSearcher};
 use pq::ProductQuantizer;
+use rayon::prelude::*;
 use serde::Deserialize;
 use std::{
     env,
@@ -246,7 +247,7 @@ fn precompute_pq<const DIM: usize, const Q: usize>(
     let fit_time = fit_start.elapsed();
 
     let encode_start = Instant::now();
-    let quantized_data = base.iter().map(|vector| pq.encode(vector)).collect();
+    let quantized_data = base.par_iter().map(|vector| pq.encode(vector)).collect();
     let encode_time = encode_start.elapsed();
 
     PqBenchData {
